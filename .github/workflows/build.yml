@@ -17,4 +17,4 @@ jobs:
 
     - run: make
 
-    - run: make install # optional
+    - run: sudo make install # optional
