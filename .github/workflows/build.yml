@@ -11,6 +11,8 @@ jobs:
       
     - run: sudo apt-get install libevent-dev
 
+    - run: sudo apt-get install libboost-all-dev
+
     - run: ./configure --disable-wallet
 
     - run: make
