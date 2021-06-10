@@ -5,6 +5,8 @@
 """Test bitcoin-cli"""
 
 from decimal import Decimal
+
+from test_framework.blocktools import COINBASE_MATURITY
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
     assert_equal,
@@ -16,7 +18,7 @@ from test_framework.util import (
 # The block reward of coinbaseoutput.nValue (50) BTC/block matures after
 # COINBASE_MATURITY (100) blocks. Therefore, after mining 101 blocks we expect
 # node 0 to have a balance of (BLOCKS - COINBASE_MATURITY) * 50 BTC/block.
-BLOCKS = 101
+BLOCKS = COINBASE_MATURITY + 1
 BALANCE = (BLOCKS - 100) * 50
 
 JSON_PARSING_ERROR = 'error: Error parsing JSON: foo'
@@ -29,6 +31,8 @@ class TestBitcoinCli(BitcoinTestFramework):
     def set_test_params(self):
         self.setup_clean_chain = True
         self.num_nodes = 1
+        if self.is_wallet_compiled():
+            self.requires_wallet = True
 
     def skip_test_if_missing_module(self):
         self.skip_if_no_cli()
@@ -149,7 +153,7 @@ class TestBitcoinCli(BitcoinTestFramework):
             assert_equal(cli_get_info['balance'], amounts[1])
 
             self.log.info("Test -getinfo with -rpcwallet=unloaded wallet returns no balances")
-            cli_get_info = self.nodes[0].cli('-getinfo', rpcwallet3).send_cli()
+            cli_get_info_keys = self.nodes[0].cli('-getinfo', rpcwallet3).send_cli().keys()
             assert 'balance' not in cli_get_info_keys
             assert 'balances' not in cli_get_info_keys
 

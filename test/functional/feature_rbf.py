@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-# Copyright (c) 2014-2019 The Bitcoin Core developers
+# Copyright (c) 2014-2020 The Bitcoin Core developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test the RBF code."""
 
 from decimal import Decimal
 
+from test_framework.blocktools import COINBASE_MATURITY
 from test_framework.messages import COIN, COutPoint, CTransaction, CTxIn, CTxOut
 from test_framework.script import CScript, OP_DROP
 from test_framework.test_framework import BitcoinTestFramework
@@ -27,18 +28,13 @@ def make_utxo(node, amount, confirmed=True, scriptPubKey=DUMMY_P2WPKH_SCRIPT):
     """
     fee = 1*COIN
     while node.getbalance() < satoshi_round((amount + fee)/COIN):
-        node.generate(100)
+        node.generate(COINBASE_MATURITY)
 
     new_addr = node.getnewaddress()
     txid = node.sendtoaddress(new_addr, satoshi_round((amount+fee)/COIN))
     tx1 = node.getrawtransaction(txid, 1)
     txid = int(txid, 16)
-    i = None
-
-    for i, txout in enumerate(tx1['vout']):
-        if txout['scriptPubKey']['addresses'] == [new_addr]:
-            break
-    assert i is not None
+    i, _ = next(filter(lambda vout: new_addr == vout[1]['scriptPubKey']['address'], enumerate(tx1['vout'])))
 
     tx2 = CTransaction()
     tx2.vin = [CTxIn(COutPoint(txid, i))]
@@ -119,6 +115,9 @@ class ReplaceByFeeTest(BitcoinTestFramework):
 
         self.log.info("Running test prioritised transactions...")
         self.test_prioritised_transactions()
+
+        self.log.info("Running test no inherited signaling...")
+        self.test_no_inherited_signaling()
 
         self.log.info("Passed")
 
@@ -567,6 +566,70 @@ class ReplaceByFeeTest(BitcoinTestFramework):
         json1  = self.nodes[0].decoderawtransaction(frawtx2b['hex'])
         assert_equal(json0["vin"][0]["sequence"], 4294967293)
         assert_equal(json1["vin"][0]["sequence"], 4294967294)
+
+    def test_no_inherited_signaling(self):
+        # Send tx from which to conflict outputs later
+        base_txid = self.nodes[0].sendtoaddress(self.nodes[0].getnewaddress(), Decimal("10"))
+        self.nodes[0].generate(1)
+        self.sync_blocks()
+
+        # Create an explicitly opt-in parent transaction
+        optin_parent_tx = self.nodes[0].createrawtransaction([{
+            'txid': base_txid,
+            'vout': 0,
+            "sequence": 0xfffffffd,
+        }], {self.nodes[0].getnewaddress(): Decimal("9.99998")})
+
+        optin_parent_tx = self.nodes[0].signrawtransactionwithwallet(optin_parent_tx)
+
+        # Broadcast parent tx
+        optin_parent_txid = self.nodes[0].sendrawtransaction(hexstring=optin_parent_tx["hex"], maxfeerate=0)
+        assert optin_parent_txid in self.nodes[0].getrawmempool()
+
+        replacement_parent_tx = self.nodes[0].createrawtransaction([{
+            'txid': base_txid,
+            'vout': 0,
+            "sequence": 0xfffffffd,
+        }], {self.nodes[0].getnewaddress(): Decimal("9.90000")})
+
+        replacement_parent_tx = self.nodes[0].signrawtransactionwithwallet(replacement_parent_tx)
+
+        # Test if parent tx can be replaced.
+        res = self.nodes[0].testmempoolaccept(rawtxs=[replacement_parent_tx['hex']], maxfeerate=0)[0]
+
+        # Parent can be replaced.
+        assert_equal(res['allowed'], True)
+
+        # Create an opt-out child tx spending the opt-in parent
+        optout_child_tx = self.nodes[0].createrawtransaction([{
+            'txid': optin_parent_txid,
+            'vout': 0,
+            "sequence": 0xffffffff,
+        }], {self.nodes[0].getnewaddress(): Decimal("9.99990")})
+
+        optout_child_tx = self.nodes[0].signrawtransactionwithwallet(optout_child_tx)
+
+        # Broadcast child tx
+        optout_child_txid = self.nodes[0].sendrawtransaction(hexstring=optout_child_tx["hex"], maxfeerate=0)
+        assert optout_child_txid in self.nodes[0].getrawmempool()
+
+        replacement_child_tx = self.nodes[0].createrawtransaction([{
+            'txid': optin_parent_txid,
+            'vout': 0,
+            "sequence": 0xffffffff,
+        }], {self.nodes[0].getnewaddress(): Decimal("9.00000")})
+
+        replacement_child_tx = self.nodes[0].signrawtransactionwithwallet(replacement_child_tx)
+
+        # Broadcast replacement child tx
+        # BIP 125 :
+        # 1. The original transactions signal replaceability explicitly or through inheritance as described in the above
+        # Summary section.
+        # The original transaction (`optout_child_tx`) doesn't signal RBF but its parent (`optin_parent_txid`) does.
+        # The replacement transaction (`replacement_child_tx`) should be able to replace the original transaction.
+        # See CVE-2021-31876 for further explanations.
+        assert optin_parent_txid in self.nodes[0].getrawmempool()
+        assert_raises_rpc_error(-26, 'txn-mempool-conflict', self.nodes[0].sendrawtransaction, replacement_child_tx["hex"], 0)
 
 if __name__ == '__main__':
     ReplaceByFeeTest().main()

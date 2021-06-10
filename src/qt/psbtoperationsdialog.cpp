@@ -19,7 +19,7 @@
 
 
 PSBTOperationsDialog::PSBTOperationsDialog(
-    QWidget* parent, WalletModel* wallet_model, ClientModel* client_model) : QDialog(parent),
+    QWidget* parent, WalletModel* wallet_model, ClientModel* client_model) : QDialog(parent, GUIUtil::dialog_flags),
                                                                              m_ui(new Ui::PSBTOperationsDialog),
                                                                              m_wallet_model(wallet_model),
                                                                              m_client_model(client_model)
@@ -141,11 +141,12 @@ void PSBTOperationsDialog::saveTransaction() {
     filename_suggestion.append(".psbt");
     QString filename = GUIUtil::getSaveFileName(this,
         tr("Save Transaction Data"), filename_suggestion,
-        tr("Partially Signed Transaction (Binary) (*.psbt)"), &selected_filter);
+        //: Expanded name of the binary PSBT file format. See: BIP 174.
+        tr("Partially Signed Transaction (Binary)") + QLatin1String(" (*.psbt)"), &selected_filter);
     if (filename.isEmpty()) {
         return;
     }
-    std::ofstream out(filename.toLocal8Bit().data());
+    std::ofstream out(filename.toLocal8Bit().data(), std::ofstream::out | std::ofstream::binary);
     out << ssTx.str();
     out.close();
     showStatus(tr("PSBT saved to disk."), StatusLevel::INFO);
